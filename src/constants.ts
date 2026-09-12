@@ -1,17 +1,35 @@
-import { GameMode, WaveformType, InstrumentType, NoiseType } from './types';
+import { GameMode, InstrumentType, NoiseType, ProgressionMode, Settings } from './types';
 
 export const FREQUENCY_RANGES: Record<GameMode, { min: number; max: number }> = {
-  high: { min: 660, max: 1320 }, // A5 to E6
-  medium: { min: 330, max: 660 }, // E4 to E5
-  low: { min: 110, max: 220 }, // A2 to A3
+  high: { min: 660, max: 1320 },
+  medium: { min: 330, max: 660 },
+  low: { min: 110, max: 220 },
   changing: { min: 110, max: 1320 }, // Full range
 };
 
-export const WAVEFORM_OPTIONS: Record<WaveformType, { name: string; description: string }> = {
-  sine: { name: 'Sine Wave', description: 'Pure tone, easiest to distinguish' },
-  sawtooth: { name: 'Sawtooth', description: 'Bright, buzzy sound' },
-  square: { name: 'Square Wave', description: 'Hollow, clarinet-like tone' },
-  triangle: { name: 'Triangle', description: 'Mellow, flute-like tone' },
+export const MIN_GAP_CENTS = 1;
+export const MAX_GAP_CENTS = 100;
+export const DEFAULT_SETTINGS: Settings = {
+  gameMode: 'medium',
+  instrument: 'sine',
+  backgroundNoise: 'none',
+  startingGapCents: 100,
+  lives: 3,
+  unlimitedLives: true,
+  questionLimit: 50,
+  progressionMode: 'target',
+  targetCorrectPercent: 75,
+  adjustmentPercent: 30,
+  successReductionPercent: 23,
+  pitchSelection: 'arbitrary',
+};
+
+export const PROGRESSION_OPTIONS: Record<ProgressionMode, string> = {
+  target: 'Target accuracy (recommended)',
+  streak2: 'Two consecutive correct',
+  streak3: 'Three consecutive correct',
+  fixed: 'Fixed gap (manual practice)',
+  custom: 'Advanced/custom percentages',
 };
 
 export const INSTRUMENT_OPTIONS: Record<InstrumentType, { name: string; description: string }> = {

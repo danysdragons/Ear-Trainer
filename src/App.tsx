@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import './App.css';
 import Header from './components/Header';
 import ReadyScreen from './components/ReadyScreen';
 import InfoScreen from './components/InfoScreen';
@@ -8,681 +7,241 @@ import GameOverScreen from './components/GameOverScreen';
 import PlayingScreen from './components/PlayingScreen';
 import AnswerButtons from './components/AnswerButtons';
 import AnimationOverlay from './components/AnimationOverlay';
-import { FREQUENCY_RANGES } from './constants';
-import { GameMode, InstrumentType, NoiseType, Pitch, HighScores } from './types';
+import { AudioEngine } from './audio';
+import { advanceDifficulty, correctAnswer, formatGap, generateRound, nominalTarget } from './game';
+import { DEFAULT_SETTINGS, PROGRESSION_OPTIONS } from './constants';
+import { sessionEnd, summarizeSession } from './session';
+import { loadScores, loadSessions, loadSettings, MAX_SAVED_SESSIONS, save, SESSIONS_KEY, SETTINGS_KEY } from './storage';
+import { Answer, EndReason, Round, SessionSummary, Settings, Trial } from './types';
 
-let audioContext: AudioContext | null = null;
-
-// Define sound effects
-const SOUND_EFFECTS = {
-  correct: {
-    type: 'sine',
-    frequencies: [523.25, 659.25, 783.99], // C5, E5, G5 (major chord)
-    durations: [0.1, 0.1, 0.4]
-  },
-  incorrect: {
-    type: 'sine',
-    frequencies: [392.00, 369.99], // G4, F#4 (dissonant)
-    durations: [0.1, 0.3]
-  },
-  gameOver: {
-    type: 'sine',
-    frequencies: [523.25, 392.00, 329.63, 261.63], // C5, G4, E4, C4 (descending)
-    durations: [0.2, 0.2, 0.2, 0.5]
-  }
-};
+type GameState = 'ready' | 'playing' | 'feedback' | 'gameOver' | 'settings' | 'info';
 
 const App = () => {
-  const [score, setScore] = useState(0);
-  const [firstPitch, setFirstPitch] = useState<Pitch | null>(null);
-  const [secondPitch, setSecondPitch] = useState<Pitch | null>(null);
-  const [gameState, setGameState] = useState<'ready' | 'playing' | 'feedback' | 'gameOver' | 'settings' | 'info'>('ready');
-  const [feedback, setFeedback] = useState('');
+  const [settings, setSettings] = useState(loadSettings);
+  const [highScores] = useState(loadScores);
+  const [sessions, setSessions] = useState(loadSessions);
+  const [audio] = useState(() => new AudioEngine());
+  const [gameState, setGameState] = useState<GameState>('ready');
+  const [round, setRound] = useState<Round | null>(null);
+  const [trials, setTrials] = useState<Trial[]>([]);
+  const [streak, setStreak] = useState(0);
+  const [summary, setSummary] = useState<SessionSummary | null>(null);
+  const [endReason, setEndReason] = useState<EndReason>('manual');
+  const sessionSaved = useRef(false);
+  const roundReplays = useRef(0);
+  const score = trials.filter(trial => trial.correct).length;
+  const mistakes = trials.length - score;
   const [currentPitchIndex, setCurrentPitchIndex] = useState(0);
-  const [isAudioInitialized, setIsAudioInitialized] = useState(false);
-  const [difficultyPercent, setDifficultyPercent] = useState(100); // 100% of a half-step (easy)
-  const [strikes, setStrikes] = useState(0);
-  const [lowestDifficulty, setLowestDifficulty] = useState(100);
-  const [gameMode, setGameMode] = useState<GameMode>('medium'); // high, medium, low, changing
-  const [instrument, setInstrument] = useState<InstrumentType>('sine');
-  const [backgroundNoise, setBackgroundNoise] = useState<NoiseType>('none');
-  const [noiseGainNode, setNoiseGainNode] = useState<GainNode | null>(null);
-  const [noiseSource, setNoiseSource] = useState<AudioBufferSourceNode | null>(null);
-  const [sandboxMode, setSandboxMode] = useState(false);
-  const [highScores, setHighScores] = useState<HighScores>(() => {
-    try {
-      const savedScores = localStorage.getItem('intonationEarTrainerHighScores');
-      return savedScores ? JSON.parse(savedScores) : {
-        high: { score: 0, difficulty: 100 },
-        medium: { score: 0, difficulty: 100 },
-        low: { score: 0, difficulty: 100 },
-        changing: { score: 0, difficulty: 100 }
-      };
-    } catch {
-      return {
-        high: { score: 0, difficulty: 100 },
-        medium: { score: 0, difficulty: 100 },
-        low: { score: 0, difficulty: 100 },
-        changing: { score: 0, difficulty: 100 }
-      };
-    }
-  });
-  const [showAnimation, setShowAnimation] = useState(false);
+  const [feedback, setFeedback] = useState('');
   const [animationType, setAnimationType] = useState('');
-  
-  // Refs for animation elements
-  const animationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  
-  // Initialize audio context on first user interaction
-  const initAudio = useCallback(() => {
-    if (!isAudioInitialized) {
-      audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-      setIsAudioInitialized(true);
-    }
-  }, [isAudioInitialized]);
+  const [showAnimation, setShowAnimation] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [audioError, setAudioError] = useState('');
+  const [manualGap, setManualGap] = useState(settings.startingGapCents);
+  const manualGapRef = useRef(settings.startingGapCents);
+  const timers = useRef(new Set<ReturnType<typeof setTimeout>>());
+  const generation = useRef(0);
+  const canAnswer = useRef(false);
+  const startingRef = useRef(false);
 
-  // Generate noise buffers
-  const createNoiseBuffer = useCallback((type: 'white' | 'pink'): AudioBuffer => {
-    if (!audioContext) throw new Error('Audio context not initialized');
-    
-    const bufferSize = audioContext.sampleRate * 2; // 2 seconds of noise
-    const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
-    const data = buffer.getChannelData(0);
-    
-    if (type === 'white') {
-      // White noise: equal power across all frequencies
-      for (let i = 0; i < bufferSize; i++) {
-        data[i] = Math.random() * 2 - 1;
-      }
-    } else if (type === 'pink') {
-      // Pink noise: power decreases by 3dB per octave
-      let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
-      for (let i = 0; i < bufferSize; i++) {
-        const white = Math.random() * 2 - 1;
-        b0 = 0.99886 * b0 + white * 0.0555179;
-        b1 = 0.99332 * b1 + white * 0.0750759;
-        b2 = 0.96900 * b2 + white * 0.1538520;
-        b3 = 0.86650 * b3 + white * 0.3104856;
-        b4 = 0.55000 * b4 + white * 0.5329522;
-        b5 = -0.7616 * b5 - white * 0.0168980;
-        data[i] = b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362;
-        data[i] *= 0.11; // Scale down
-        b6 = white * 0.115926;
-      }
-    }
-    
-    return buffer;
+  const clearTimers = useCallback(() => {
+    generation.current += 1;
+    timers.current.forEach(clearTimeout);
+    timers.current.clear();
+    canAnswer.current = false;
   }, []);
 
-  // Start background noise
-  const startBackgroundNoise = useCallback(() => {
-    if (!audioContext || backgroundNoise === 'none') return;
-    
-    // Stop existing noise
-    if (noiseSource) {
-      noiseSource.stop();
-      setNoiseSource(null);
-    }
-    
-    try {
-      const buffer = createNoiseBuffer(backgroundNoise as 'white' | 'pink');
-      const source = audioContext.createBufferSource();
-      const gainNode = audioContext.createGain();
-      
-      source.buffer = buffer;
-      source.loop = true;
-      gainNode.gain.value = 0.05; // Low volume background noise
-      
-      source.connect(gainNode);
-      gainNode.connect(audioContext.destination);
-      
-      source.start();
-      setNoiseSource(source);
-      setNoiseGainNode(gainNode);
-    } catch (error) {
-      console.error('Failed to start background noise:', error);
-    }
-  }, [audioContext, backgroundNoise, noiseSource, createNoiseBuffer]);
-
-  // Stop background noise
-  const stopBackgroundNoise = useCallback(() => {
-    if (noiseSource) {
-      noiseSource.stop();
-      setNoiseSource(null);
-      setNoiseGainNode(null);
-    }
-  }, [noiseSource]);
-
-  // Generate a random frequency between min and max Hz based on the current mode
-  const getFrequencyForMode = useCallback((): number => {
-    const range = FREQUENCY_RANGES[gameMode];
-    return range.min + Math.random() * (range.max - range.min);
-  }, [gameMode]);
-
-  // Synthesize instrument sounds
-  const playInstrument = useCallback((frequency: number, duration: number = 1) => {
-    if (!audioContext) return;
-    
-    const gainNode = audioContext.createGain();
-    gainNode.connect(audioContext.destination);
-    
-    switch (instrument) {
-      case 'piano':
-        // Piano: fundamental + harmonics with exponential decay
-        [1, 2, 3, 4, 5].forEach((harmonic, index) => {
-          const osc = audioContext!.createOscillator();
-          const harmGain = audioContext!.createGain();
-          
-          osc.frequency.value = frequency * harmonic;
-          osc.type = 'sine';
-          
-          const amplitude = 0.3 / Math.pow(harmonic, 0.8);
-          harmGain.gain.setValueAtTime(0, audioContext!.currentTime);
-          harmGain.gain.linearRampToValueAtTime(amplitude, audioContext!.currentTime + 0.01);
-          harmGain.gain.exponentialRampToValueAtTime(0.001, audioContext!.currentTime + duration);
-          
-          osc.connect(harmGain);
-          harmGain.connect(gainNode);
-          osc.start();
-          osc.stop(audioContext!.currentTime + duration);
-        });
-        break;
-        
-      case 'violin':
-        // Violin: sawtooth with slight vibrato and bow noise
-        const violinOsc = audioContext.createOscillator();
-        const violinGain = audioContext.createGain();
-        const vibratoOsc = audioContext.createOscillator();
-        const vibratoGain = audioContext.createGain();
-        
-        violinOsc.type = 'sawtooth';
-        violinOsc.frequency.value = frequency;
-        
-        // Add subtle vibrato
-        vibratoOsc.frequency.value = 5; // 5Hz vibrato
-        vibratoGain.gain.value = 2; // Small frequency modulation
-        vibratoOsc.connect(vibratoGain);
-        vibratoGain.connect(violinOsc.frequency);
-        
-        violinGain.gain.setValueAtTime(0, audioContext.currentTime);
-        violinGain.gain.linearRampToValueAtTime(0.4, audioContext.currentTime + 0.1);
-        violinGain.gain.linearRampToValueAtTime(0.3, audioContext.currentTime + duration - 0.1);
-        violinGain.gain.linearRampToValueAtTime(0, audioContext.currentTime + duration);
-        
-        violinOsc.connect(violinGain);
-        violinGain.connect(gainNode);
-        violinOsc.start();
-        vibratoOsc.start();
-        violinOsc.stop(audioContext.currentTime + duration);
-        vibratoOsc.stop(audioContext.currentTime + duration);
-        break;
-        
-      case 'flute':
-        // Flute: sine wave with breath noise and harmonics
-        const fluteOsc = audioContext.createOscillator();
-        const fluteGain = audioContext.createGain();
-        const noiseBuffer = audioContext.createBuffer(1, audioContext.sampleRate * 0.1, audioContext.sampleRate);
-        const noiseData = noiseBuffer.getChannelData(0);
-        
-        // Generate breath noise
-        for (let i = 0; i < noiseData.length; i++) {
-          noiseData[i] = (Math.random() * 2 - 1) * 0.02;
-        }
-        
-        const noiseSource = audioContext.createBufferSource();
-        const noiseGain = audioContext.createGain();
-        const noiseFilter = audioContext.createBiquadFilter();
-        
-        noiseSource.buffer = noiseBuffer;
-        noiseSource.loop = true;
-        noiseFilter.type = 'highpass';
-        noiseFilter.frequency.value = frequency * 2;
-        noiseGain.gain.value = 0.1;
-        
-        fluteOsc.type = 'sine';
-        fluteOsc.frequency.value = frequency;
-        
-        fluteGain.gain.setValueAtTime(0, audioContext.currentTime);
-        fluteGain.gain.linearRampToValueAtTime(0.3, audioContext.currentTime + 0.05);
-        fluteGain.gain.linearRampToValueAtTime(0.3, audioContext.currentTime + duration - 0.05);
-        fluteGain.gain.linearRampToValueAtTime(0, audioContext.currentTime + duration);
-        
-        fluteOsc.connect(fluteGain);
-        noiseSource.connect(noiseFilter);
-        noiseFilter.connect(noiseGain);
-        noiseGain.connect(gainNode);
-        fluteGain.connect(gainNode);
-        
-        fluteOsc.start();
-        noiseSource.start();
-        fluteOsc.stop(audioContext.currentTime + duration);
-        noiseSource.stop(audioContext.currentTime + duration);
-        break;
-        
-      default:
-        // Basic waveforms (sine, sawtooth, square, triangle)
-        const oscillator = audioContext.createOscillator();
-        const basicGain = audioContext.createGain();
-        
-        oscillator.type = instrument as OscillatorType;
-        oscillator.frequency.value = frequency;
-        
-        basicGain.gain.setValueAtTime(0, audioContext.currentTime);
-        basicGain.gain.linearRampToValueAtTime(0.5, audioContext.currentTime + 0.05);
-        basicGain.gain.linearRampToValueAtTime(0.5, audioContext.currentTime + duration - 0.05);
-        basicGain.gain.linearRampToValueAtTime(0, audioContext.currentTime + duration);
-        
-        oscillator.connect(basicGain);
-        basicGain.connect(gainNode);
-        oscillator.start();
-        oscillator.stop(audioContext.currentTime + duration);
-        break;
-    }
-  }, [instrument]);
-
-  // Play a sequence of tones for sound effects
-  const playSoundEffect = useCallback((effectName: keyof typeof SOUND_EFFECTS) => {
-    if (!audioContext || !SOUND_EFFECTS[effectName]) return;
-    
-    const effect = SOUND_EFFECTS[effectName];
-    let startTime = audioContext.currentTime;
-    
-    effect.frequencies.forEach((freq: number, index: number) => {
-      if (!audioContext) return;
-      const oscillator = audioContext.createOscillator();
-      const gainNode = audioContext.createGain();
-      
-      oscillator.type = effect.type as OscillatorType;
-      oscillator.frequency.value = freq;
-      
-      // Apply envelope
-      gainNode.gain.setValueAtTime(0, startTime);
-      gainNode.gain.linearRampToValueAtTime(0.3, startTime + 0.05);
-      gainNode.gain.linearRampToValueAtTime(0.3, startTime + effect.durations[index] - 0.05);
-      gainNode.gain.linearRampToValueAtTime(0, startTime + effect.durations[index]);
-      
-      oscillator.connect(gainNode);
-      gainNode.connect(audioContext.destination);
-      
-      oscillator.start(startTime);
-      oscillator.stop(startTime + effect.durations[index]);
-      
-      startTime += effect.durations[index];
-    });
+  const schedule = useCallback((callback: () => void, delay: number) => {
+    const timer = setTimeout(() => {
+      timers.current.delete(timer);
+      callback();
+    }, delay);
+    timers.current.add(timer);
   }, []);
 
-  // Generate a pair of pitches with one slightly higher or lower than the other
-  const generatePitchPair = useCallback(() => {
-    // Get base frequency according to selected mode
-    const baseFreq = getFrequencyForMode();
-    
-    // Use current difficulty level
-    const halfStepRatio = Math.pow(2, 1/12); // ratio for a half-step
-    const percentOfHalfStep = difficultyPercent / 100; // Convert percentage to decimal
-    const pitchDifference = Math.pow(halfStepRatio, percentOfHalfStep) - 1;
-    
-    // Randomly decide if second pitch should be higher or lower
-    const isSecondPitchHigher = Math.random() > 0.5;
-    
-    let pitch1 = baseFreq;
-    let pitch2;
-    
-    if (isSecondPitchHigher) {
-      pitch2 = baseFreq * (1 + pitchDifference);
-    } else {
-      pitch2 = baseFreq / (1 + pitchDifference);
-    }
-    
-    setFirstPitch({
-      frequency: pitch1,
-      isHigher: !isSecondPitchHigher
-    });
-    
-    setSecondPitch({
-      frequency: pitch2,
-      isHigher: isSecondPitchHigher
-    });
-    
-    return { pitch1, pitch2 };
-  }, [difficultyPercent, getFrequencyForMode]);
+  useEffect(() => () => {
+    clearTimers();
+    audio.close();
+  }, [audio, clearTimers]);
 
-  // Start a new round
-  const startRound = useCallback(() => {
-    initAudio();
-    
-    // Start background noise if enabled
-    if (backgroundNoise !== 'none') {
-      startBackgroundNoise();
-    }
-    
-    const { pitch1, pitch2 } = generatePitchPair();
-    setGameState('playing');
+  useEffect(() => { save(SETTINGS_KEY, settings); }, [settings]);
+  useEffect(() => { save(SESSIONS_KEY, sessions); }, [sessions]);
+
+  const playPair = useCallback((pair: Round) => {
+    clearTimers();
+    setShowAnimation(false);
     setCurrentPitchIndex(0);
-    
-    // Play the first pitch after a short delay
-    setTimeout(() => {
-      playInstrument(pitch1, 1);
+    schedule(() => {
+      audio.playTone(pair.pitches[0], settings.instrument);
       setCurrentPitchIndex(1);
-      
-      // Play the second pitch after the first one finishes
-      setTimeout(() => {
-        playInstrument(pitch2, 1);
-        setCurrentPitchIndex(2);
-      }, 1500);
     }, 500);
-  }, [generatePitchPair, playInstrument, initAudio, backgroundNoise, startBackgroundNoise]);
+    schedule(() => {
+      audio.playTone(pair.pitches[1], settings.instrument);
+      setCurrentPitchIndex(2);
+    }, 2000);
+    // Do not accept answers or replay until the second one-second tone has ended.
+    schedule(() => {
+      setCurrentPitchIndex(3);
+      canAnswer.current = true;
+    }, 3000);
+  }, [audio, clearTimers, schedule, settings.instrument]);
 
-  // Start a new game
-  const startNewGame = useCallback(() => {
-    setScore(0);
-    setStrikes(0);
-    if (!sandboxMode) {
-      setDifficultyPercent(100);
-    }
-    setLowestDifficulty(100);
-    stopBackgroundNoise();
-    setGameState('ready');
+  const startRound = useCallback((gap: number) => {
+    const pair = generateRound(settings, gap);
+    setRound(pair);
+    roundReplays.current = 0;
     setFeedback('');
-  }, [sandboxMode, stopBackgroundNoise]);
+    setGameState('playing');
+    playPair(pair);
+  }, [settings, playPair]);
 
-  // Open settings
-  const openSettings = useCallback(() => {
-    setGameState('settings');
-  }, []);
-
-  // Open info
-  const openInfo = useCallback(() => {
-    setGameState('info');
-  }, []);
-
-  // Close modal screens
-  const closeModal = useCallback(() => {
-    setGameState('ready');
-  }, []);
-
-  // Change game mode
-  const changeGameMode = useCallback((mode: GameMode) => {
-    setGameMode(mode);
-  }, []);
-
-  // Change instrument
-  const changeInstrument = useCallback((newInstrument: InstrumentType) => {
-    setInstrument(newInstrument);
-  }, []);
-
-  // Change background noise
-  const changeBackgroundNoise = useCallback((newNoise: NoiseType) => {
-    setBackgroundNoise(newNoise);
-    // Restart noise if game is active
-    if (gameState === 'playing' || gameState === 'feedback') {
-      stopBackgroundNoise();
-      if (newNoise !== 'none') {
-        setTimeout(startBackgroundNoise, 100);
-      }
+  const startGame = async () => {
+    if (startingRef.current) return;
+    clearTimers();
+    const token = generation.current;
+    startingRef.current = true;
+    setStarting(true);
+    setAudioError('');
+    try {
+      await audio.init();
+      if (token !== generation.current) return;
+      audio.stop();
+      audio.startNoise(settings.backgroundNoise);
+      setTrials([]);
+      setStreak(0);
+      setSummary(null);
+      sessionSaved.current = false;
+      setManualGap(settings.startingGapCents);
+      manualGapRef.current = settings.startingGapCents;
+      setStarting(false);
+      startRound(settings.startingGapCents);
+    } catch {
+      if (token === generation.current) setAudioError('Audio could not start. Please try Start Game again in a browser with Web Audio support.');
+    } finally {
+      startingRef.current = false;
+      if (token === generation.current) setStarting(false);
     }
-  }, [gameState, startBackgroundNoise, stopBackgroundNoise]);
-
-  // Replay the current pair of pitches
-  const replayPitches = useCallback(() => {
-    if (!firstPitch || !secondPitch || gameState !== 'playing') return;
-    
-    // Reset the pitch index
-    setCurrentPitchIndex(0);
-    
-    // Play the pitches again
-    setTimeout(() => {
-      playInstrument(firstPitch.frequency, 1);
-      setCurrentPitchIndex(1);
-      
-      setTimeout(() => {
-        playInstrument(secondPitch.frequency, 1);
-        setCurrentPitchIndex(2);
-      }, 1500);
-    }, 500);
-  }, [firstPitch, secondPitch, gameState, playInstrument]);
-
-  // Check and update high scores
-  const updateHighScores = useCallback((finalScore: number, smallestDiff: number) => {
-    setHighScores((prevScores: HighScores) => {
-      const newScores = { ...prevScores };
-      
-      // Update if score is higher or difficulty is smaller
-      if (
-        finalScore > prevScores[gameMode].score || 
-        (finalScore === prevScores[gameMode].score && smallestDiff < prevScores[gameMode].difficulty)
-      ) {
-        newScores[gameMode] = {
-          score: finalScore,
-          difficulty: smallestDiff
-        };
-      }
-      
-      // Save to localStorage
-      try {
-        localStorage.setItem('intonationEarTrainerHighScores', JSON.stringify(newScores));
-      } catch (e) {
-        console.error('Failed to save high scores:', e);
-      }
-      
-      return newScores;
-    });
-  }, [gameMode]);
-
-  // Trigger animations
-  const triggerAnimation = useCallback((type: string) => {
-    // Clear any existing animation timeout
-    if (animationTimeoutRef.current) {
-      clearTimeout(animationTimeoutRef.current);
-    }
-    
-    setShowAnimation(true);
-    setAnimationType(type);
-    
-    // Hide animation after a delay
-    animationTimeoutRef.current = setTimeout(() => {
-      setShowAnimation(false);
-    }, 1000);
-  }, []);
-
-  // Adjust difficulty based on user performance
-  const adjustDifficulty = useCallback((isCorrect: boolean) => {
-    if (isCorrect) {
-      // Make it harder (smaller pitch difference)
-      // Decrease by ~23% each time, which creates a nice progression
-      const newDifficulty = Math.max(difficultyPercent * 0.77, 1);
-      setDifficultyPercent(newDifficulty);
-      
-      // Track the lowest difficulty (smallest pitch difference) achieved
-      if (newDifficulty < lowestDifficulty) {
-        setLowestDifficulty(newDifficulty);
-      }
-    } else {
-      // Make it easier (larger pitch difference)
-      // Increase by ~30% but cap at 100%
-      setDifficultyPercent(Math.min(difficultyPercent * 1.3, 100));
-    }
-  }, [difficultyPercent, lowestDifficulty]);
-
-  // Handle user's answer
-  const handleAnswer = useCallback((userAnswer: 'higher' | 'lower') => {
-    if (gameState !== 'playing' || currentPitchIndex < 2) return;
-    if (!secondPitch) return;
-    
-    const isCorrect = 
-      (userAnswer === 'higher' && secondPitch.isHigher) || 
-      (userAnswer === 'lower' && !secondPitch.isHigher);
-    
-    if (isCorrect) {
-      setScore(prevScore => prevScore + 1);
-      setFeedback('Correct!');
-      if (!sandboxMode) {
-        adjustDifficulty(true);
-      }
-      playSoundEffect('correct');
-      triggerAnimation('correct');
-    } else {
-      setFeedback('Oops! Incorrect!');
-      if (!sandboxMode) {
-        setStrikes(prevStrikes => prevStrikes + 1);
-        adjustDifficulty(false);
-      }
-      playSoundEffect('incorrect');
-      triggerAnimation('incorrect');
-    }
-    
-    setGameState('feedback');
-    
-    // Check if game over (3 strikes)
-    if (!sandboxMode && !isCorrect && strikes + 1 >= 3) {
-      // Update high scores
-      updateHighScores(score, lowestDifficulty);
-
-      setTimeout(() => {
-        stopBackgroundNoise();
-        playSoundEffect('gameOver');
-        setGameState('gameOver');
-      }, 1500);
-    } else {
-      // Start next round after feedback
-      setTimeout(() => {
-        setFeedback('');
-        startRound();
-      }, 1500);
-    }
-  }, [gameState, currentPitchIndex, secondPitch, strikes, score, lowestDifficulty,
-      adjustDifficulty, startRound, playSoundEffect, triggerAnimation, updateHighScores, sandboxMode]);
-
-  // Format the difficulty percentage with one decimal place
-  const formatDifficulty = (percent: number): string => {
-    return percent < 10 ? percent.toFixed(1) : Math.round(percent).toString();
   };
 
-  // Handle keyboard input
+  const finishSession = useCallback((answeredTrials: Trial[], reason: EndReason = 'manual') => {
+    if (sessionSaved.current) return;
+    sessionSaved.current = true;
+    clearTimers();
+    audio.stop();
+    setShowAnimation(false);
+    setFeedback('');
+    const result = summarizeSession(answeredTrials, settings);
+    setSummary(result);
+    setEndReason(reason);
+    setGameState('gameOver');
+    if (result.answered > 0) {
+      const record = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        completedAt: new Date().toISOString(),
+        settings: { ...settings }, summary: result, endReason: reason,
+      };
+      setSessions(previous => [record, ...previous].slice(0, MAX_SAVED_SESSIONS));
+    }
+  }, [audio, clearTimers, settings]);
+
+  const handleAnswer = useCallback((answer: Answer) => {
+    if (!round || gameState !== 'playing' || !canAnswer.current) return;
+    canAnswer.current = false;
+    const correct = answer === correctAnswer(round);
+    const answeredTrials = [...trials, { gapCents: round.gapCents, correct, replays: roundReplays.current }];
+    const following = advanceDifficulty(round.gapCents, correct, streak, settings);
+    setTrials(answeredTrials);
+    setStreak(following.streak);
+    setFeedback(correct ? 'Correct!' : `The ${round.questionTarget} pitch was ${correctAnswer(round)}.`);
+    setGameState('feedback');
+    setAnimationType(correct ? 'correct' : 'incorrect');
+    setShowAnimation(true);
+    audio.playEffect(correct ? 'correct' : 'incorrect');
+    schedule(() => setShowAnimation(false), 1000);
+    const reason = sessionEnd(settings, answeredTrials.length, mistakes + (correct ? 0 : 1));
+    if (reason) {
+      schedule(() => {
+        finishSession(answeredTrials, reason);
+        if (reason === 'lives') audio.playEffect('gameOver');
+      }, 1500);
+    } else {
+      // Carry the computed gap into the timer, including completed streak state.
+      schedule(() => startRound(settings.progressionMode === 'fixed' ? manualGapRef.current : following.gap), 1500);
+    }
+  }, [round, gameState, trials, streak, mistakes, settings, audio, schedule, finishSession, startRound]);
+
+  const replayPitches = useCallback(() => {
+    if (round && gameState === 'playing' && canAnswer.current) {
+      roundReplays.current += 1;
+      playPair(round);
+    }
+  }, [round, gameState, playPair]);
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (gameState === 'playing' && currentPitchIndex === 2) {
-        if (event.key === 'ArrowUp') {
-          handleAnswer('higher');
-        } else if (event.key === 'ArrowDown') {
-          handleAnswer('lower');
-        } else if (event.key === 'r' || event.key === 'R') {
-          replayPitches();
-        }
-      }
+      const target = event.target;
+      if (event.repeat || (target instanceof Element && target.closest('input, select, textarea, [contenteditable="true"]'))) return;
+      if (!canAnswer.current || gameState !== 'playing') return;
+      if (['ArrowUp', 'ArrowDown', 'r', 'R'].includes(event.key)) event.preventDefault();
+      if (event.key === 'ArrowUp') handleAnswer('higher');
+      else if (event.key === 'ArrowDown') handleAnswer('lower');
+      else if (event.key.toLowerCase() === 'r') replayPitches();
     };
-    
     window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [gameState, currentPitchIndex, handleAnswer, replayPitches]);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [gameState, handleAnswer, replayPitches]);
 
-  // Clean up animation timeouts on unmount
-  useEffect(() => {
-    return () => {
-      if (animationTimeoutRef.current) {
-        clearTimeout(animationTimeoutRef.current);
-      }
-    };
-  }, []);
+  const navigate = (screen: GameState) => {
+    clearTimers();
+    audio.stop();
+    setStarting(false);
+    setAudioError('');
+    setFeedback('');
+    setShowAnimation(false);
+    setGameState(screen);
+  };
+  const saveSettings = (updated: Settings) => {
+    setSettings(updated);
+    navigate('ready');
+  };
+  const useRecommended = () => saveSettings({
+    ...settings, progressionMode: 'target', targetCorrectPercent: 75, adjustmentPercent: 30,
+    unlimitedLives: true, questionLimit: DEFAULT_SETTINGS.questionLimit,
+  });
+  const target = nominalTarget(settings);
+  const isActive = gameState === 'playing' || gameState === 'feedback';
+  const acceptingAnswers = gameState === 'playing' && currentPitchIndex === 3;
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen bg-gray-100 p-4">
-      <h1 className="text-3xl font-bold mb-6 text-indigo-700">Intonation Ear Trainer</h1>
-
+    <main className="flex flex-col items-center justify-center min-h-screen bg-gray-100 p-4">
+      <h1 className="text-3xl font-bold mb-6 text-indigo-700 text-center">Intonation Ear Trainer</h1>
       <AnimationOverlay show={showAnimation} type={animationType} />
-
       <div className="bg-white rounded-lg shadow-lg p-6 w-full max-w-md">
-        <Header gameState={gameState} openInfo={openInfo} openSettings={openSettings} />
-
-        {(gameState === 'playing' || gameState === 'feedback' || gameState === 'gameOver') && (
-          <div className="mb-6 text-center">
-            <div className="flex justify-between mb-2">
-              <p className="text-xl">Score: {score}</p>
-              <p className="text-xl">{sandboxMode ? 'Sandbox' : `Strikes: ${strikes}/3`}</p>
+        <Header gameState={starting ? 'starting' : gameState} openInfo={() => navigate('info')} openSettings={() => navigate('settings')} />
+        {audioError && <p role="alert" className="text-red-700 mb-4">{audioError}</p>}
+        {isActive && round && (
+          <>
+            <div className="mb-5 text-center">
+              <div className="flex justify-between mb-3"><p className="text-lg">Correct: {score}/{trials.length}</p><p className="text-lg">{settings.unlimitedLives ? 'Unlimited lives' : `Lives: ${Math.max(0, settings.lives - mistakes)}/${settings.lives}`}</p></div>
+              <div className="bg-gray-100 rounded-lg p-3"><p className="text-sm text-gray-600">Current pitch gap</p><p className="text-xl font-semibold">{formatGap(round.gapCents)} cents</p><p className="text-xs text-gray-500 mt-1"><span className="capitalize">{settings.gameMode}</span> register · {settings.pitchSelection === 'note' ? 'Musical note reference' : 'Arbitrary pitches'}</p></div>
             </div>
-
-            <div className="bg-gray-100 rounded-lg p-3 mb-3">
-              <p className="text-sm text-gray-500">Current Difficulty</p>
-              <p className="text-lg font-semibold">{formatDifficulty(difficultyPercent)}% of a half-step</p>
-              {sandboxMode && (
-                <input
-                  type="range"
-                  min="1"
-                  max="100"
-                  value={difficultyPercent}
-                  onChange={(e) => setDifficultyPercent(parseFloat(e.target.value))}
-                  className="w-full mt-2"
-                />
-              )}
-            </div>
-
-            <div className="bg-gray-100 rounded-lg p-3 mb-3">
-              <p className="text-sm text-gray-500">Mode</p>
-              <p className="text-lg font-semibold capitalize">{gameMode} First Pitch</p>
-            </div>
-
-            {feedback && (
-              <p className={`text-lg font-semibold ${feedback === 'Correct!' ? 'text-green-600' : 'text-red-600'}`}>{feedback}</p>
-            )}
-          </div>
+            <p className="text-sm text-center text-gray-600 mb-3">{PROGRESSION_OPTIONS[settings.progressionMode]}{target === null ? '' : ` · nominal ${formatGap(target)}% correct`}</p>
+            {settings.progressionMode.startsWith('streak') && <p className="text-sm text-center mb-3">Correct streak: {streak}/{settings.progressionMode === 'streak2' ? 2 : 3}</p>}
+            {settings.questionLimit !== null && <p className="text-sm text-center text-gray-600 mb-3">Answered: {trials.length}/{settings.questionLimit}</p>}
+            <PlayingScreen currentPitchIndex={currentPitchIndex} questionTarget={round.questionTarget} replayPitches={replayPitches} acceptingAnswers={acceptingAnswers} />
+            <p role="status" className={`min-h-[1.75rem] text-center font-semibold mb-3 ${animationType === 'correct' ? 'text-green-700' : 'text-red-700'}`}>{feedback}</p>
+            <AnswerButtons handleAnswer={handleAnswer} disabled={!acceptingAnswers} />
+            {settings.progressionMode === 'fixed' && <div className="mt-5"><label htmlFor="manualGap" className="text-sm">Next pair’s gap: {formatGap(manualGap)} cents</label><input id="manualGap" type="range" min="1" max="100" step="0.1" value={manualGap} onChange={event => { const value = Number(event.target.value); setManualGap(value); manualGapRef.current = value; }} className="w-full accent-indigo-600" /><p className="text-xs text-gray-500">Applies after your next answer. Replay keeps the current pair.</p></div>}
+            <button onClick={() => finishSession(trials)} className="w-full text-sm text-gray-600 underline mt-5">End practice</button>
+          </>
         )}
-
-        {gameState === 'ready' && (
-          <ReadyScreen
-            startRound={startRound}
-            sandboxMode={sandboxMode}
-            difficultyPercent={difficultyPercent}
-            setDifficultyPercent={setDifficultyPercent}
-            highScores={highScores}
-            formatDifficulty={formatDifficulty}
-          />
-        )}
-
-        {gameState === 'info' && <InfoScreen close={closeModal} />}
-
-        {gameState === 'settings' && (
-          <SettingsScreen
-            gameMode={gameMode}
-            changeGameMode={changeGameMode}
-            instrument={instrument}
-            changeInstrument={changeInstrument}
-            backgroundNoise={backgroundNoise}
-            changeBackgroundNoise={changeBackgroundNoise}
-            sandboxMode={sandboxMode}
-            setSandboxMode={setSandboxMode}
-            difficultyPercent={difficultyPercent}
-            setDifficultyPercent={setDifficultyPercent}
-            close={closeModal}
-          />
-        )}
-
-        {gameState === 'playing' && (
-          <PlayingScreen currentPitchIndex={currentPitchIndex} replayPitches={replayPitches} />
-        )}
-
-        {gameState === 'gameOver' && (
-          <GameOverScreen
-            score={score}
-            lowestDifficulty={lowestDifficulty}
-            gameMode={gameMode}
-            highScores={highScores}
-            startNewGame={startNewGame}
-            openSettings={openSettings}
-            formatDifficulty={formatDifficulty}
-          />
-        )}
-
-        {(gameState === 'playing' || gameState === 'feedback') && (
-          <AnswerButtons
-            handleAnswer={handleAnswer}
-            disabled={gameState !== 'playing' || currentPitchIndex < 2}
-          />
-        )}
+        {gameState === 'ready' && <ReadyScreen startGame={startGame} openSettings={() => navigate('settings')} settings={settings} highScores={highScores} sessions={sessions} useRecommended={useRecommended} starting={starting} />}
+        {gameState === 'settings' && <SettingsScreen settings={settings} onSave={saveSettings} close={() => navigate('ready')} />}
+        {gameState === 'info' && <InfoScreen close={() => navigate('ready')} />}
+        {gameState === 'gameOver' && summary && <GameOverScreen summary={summary} settings={settings} endReason={endReason} startNewGame={() => navigate('ready')} openSettings={() => navigate('settings')} />}
       </div>
-
-      <div className="mt-6 text-sm text-gray-500">Intonation Ear Trainer App Clone | Built with React</div>
-    </div>
+      <p className="mt-6 text-sm text-gray-500 text-center">Small differences. Careful listening.</p>
+    </main>
   );
 };
 

@@ -1,245 +1,111 @@
-# Intonation Ear Trainer App
+# Intonation Ear Trainer
 
-A React-based web application that trains your ear to distinguish fine pitch differences and improve your musical intonation skills.
+A browser-based practice tool for hearing small pitch differences. Listen to two tones and decide whether the **first or second pitch**, as named in the question, is higher or lower than the other.
 
-![Intonation Ear Trainer App Screenshot](https://via.placeholder.com/600x400/4F46E5/FFFFFF?text=Intonation+Ear+Trainer+App)
+## Run locally
 
-## 🎵 What is Intonation Ear Trainer?
+Install Node.js and npm, then run:
 
-Intonation Ear Trainer is an ear training tool designed to help musicians develop their ability to perceive subtle pitch differences. Unlike traditional interval training apps that focus on identifying named musical intervals, Intonation Ear Trainer specifically targets **pitch acuity** - the ability to distinguish whether one pitch is higher or lower than another by very small amounts.
-
-This skill is essential for:
-- **Intonation** - Playing or singing in tune
-- **Ensemble playing** - Staying in tune with other musicians  
-- **Instrument tuning** - Fine-tuning instruments by ear
-- **General pitch awareness** - Developing a more sensitive musical ear
-
-## 🎯 Features
-
-### Core Gameplay
-- **Sequential Pitch Comparison**: Listen to two pitches and identify if the second is higher or lower
-- **Adaptive Difficulty**: Pitch differences automatically decrease with correct answers and increase with mistakes
-- **Three Strikes System**: Game ends after three incorrect answers
-- **Real-time Scoring**: Track your progress with immediate feedback
-
-### Game Modes
-- **High Register**: First pitch consistently in upper range (660-1320 Hz)
-- **Medium Register**: First pitch in middle range (330-660 Hz) 
-- **Low Register**: First pitch in lower range (110-220 Hz)
-- **Changing Register**: Randomized first pitch across full range
-
-### Enhanced Features
-- **Sound Effects**: Pleasant audio feedback for correct/incorrect answers
-- **Visual Animations**: Animated feedback with checkmarks and X's
-- **High Score Tracking**: Local storage of best scores for each mode
-- **Keyboard Controls**: Arrow keys and 'R' for replay functionality
-- **Replay Feature**: Re-listen to pitch pairs during gameplay
-- **Responsive Design**: Works on desktop and mobile devices
-
-## 🚀 Quick Start
-
-### Prerequisites
-- Node.js (v14 or higher)
-- npm or yarn
-
-### Installation
-
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/yourusername/intune-ear-training.git
-   cd intune-ear-training
-   ```
-
-2. **Install dependencies**
-   ```bash
-   npm install
-   # or
-   yarn install
-   ```
-
-3. **Start the development server**
-   ```bash
-   npm start
-   # or
-   yarn start
-   ```
-
-4. **Open your browser**
-   Navigate to `http://localhost:3000`
-
-### Building for Production
-
-```bash
-npm run build
-# or
-yarn build
+```sh
+npm ci
+npm start
 ```
 
-## 🎮 How to Play
+Open http://localhost:3000. Audio starts after you click **Start Game**. A browser with Web Audio support is required.
 
-1. **Select a Mode**: Choose your preferred pitch register in Settings
-2. **Start the Game**: Click "Start Game" or press the play button
-3. **Listen Carefully**: Two pitches will play sequentially
-4. **Make Your Choice**: Click "Higher" or "Lower" based on the second pitch
-5. **Track Progress**: Watch your difficulty level decrease as you improve
-6. **Avoid Strikes**: Three wrong answers will end the game
-
-### Keyboard Controls
-- **↑ (Up Arrow)**: Select "Higher"
-- **↓ (Down Arrow)**: Select "Lower"  
-- **R**: Replay the current pitch pair
-
-## 🏗️ Development Iterations
-
-This project was built in four progressive iterations:
-
-### Iteration 1: Basic Functionality
-- Core pitch comparison mechanics
-- Simple UI with Higher/Lower buttons
-- Basic scoring system
-- Correct/incorrect feedback
-
-### Iteration 2: Adaptive Difficulty
-- Dynamic difficulty adjustment
-- Three-strikes game termination
-- Difficulty percentage display
-- Final score reporting
-
-### Iteration 3: Game Modes
-- Multiple pitch register modes
-- Settings screen
-- Mode-specific pitch generation
-- Enhanced UI organization
-
-### Iteration 4: Polish & Features
-- Sound effects and animations
-- Local high score storage
-- Keyboard controls
-- Info screen with instructions
-- Replay functionality
-- Visual enhancements
-
-## 🧠 Technical Implementation
-
-### Audio Generation
-- **Web Audio API**: Generates precise sine wave tones
-- **Frequency Calculation**: Uses logarithmic ratios for musical accuracy
-- **Anti-aliasing**: Envelope shaping prevents audio clicks
-
-### Pitch Calculation
-```javascript
-// Calculate pitch difference as percentage of half-step
-const halfStepRatio = Math.pow(2, 1/12);
-const percentOfHalfStep = difficultyPercent / 100;
-const pitchDifference = Math.pow(halfStepRatio, percentOfHalfStep) - 1;
+```sh
+npm run build                               # Static production files in build/
+CI=true npm test -- --watchAll=false --runInBand
+npx tsc --noEmit
 ```
 
-### Adaptive Algorithm
-- **Correct Answer**: Difficulty × 0.77 (minimum 1%)
-- **Incorrect Answer**: Difficulty × 1.3 (maximum 100%)
-- **Starting Difficulty**: 100% of a half-step
+## Deployment
 
-### State Management
-- React hooks for component state
-- localStorage for persistent high scores
-- Audio context management for browser compatibility
+Every push to `main` runs the test suite, creates a production build, and deploys it to [GitHub Pages](https://danysdragons.github.io/Ear-Trainer/) through `.github/workflows/deploy-pages.yml`. The repository's Pages source must be set to **GitHub Actions** once under **Settings → Pages**.
 
-## 🎨 UI/UX Design
+## Practice settings
 
-### Color Scheme
-- **Primary**: Indigo (#4F46E5) - Trust and focus
-- **Success**: Green (#059669) - Correct answers
-- **Error**: Red (#DC2626) - Incorrect answers
-- **Background**: Light gray (#F3F4F6) - Comfortable viewing
+Settings are saved on the current device. Open Settings, make changes, and select **Save settings**. Cancel discards edits; Restore defaults resets the form before saving.
 
-### Responsive Design
-- Mobile-first approach
-- Touch-friendly button sizes
-- Scalable typography
-- Adaptive layouts
+| Setting | Options / behaviour |
+| --- | --- |
+| Starting pitch gap | 1–100 cents, in 0.1-cent steps. Every session starts at this gap. |
+| Progression rule | Target accuracy, two or three consecutive correct, fixed gap, or advanced/custom percentages. |
+| Target success rate | 60–90%, default 75%. Higher targets favour more successful answers. |
+| Adjustment speed | 1–100% widening after a mistake, default 30%. Target and streak modes automatically calculate the matching reduction. |
+| Unlimited lives | Enabled by default; adaptation still operates. Turn off to use 1–99 lives. |
+| Question limit | Optional, 1–1000 answers; default 50. A session ends at the first enabled limit, or when you select End practice. Replays do not count. |
+| Pitch selection | Arbitrary frequencies or a musical note reference. |
+| Pitch register | Low (110–220 Hz), medium (330–660 Hz), high (660–1320 Hz), or changing (110–1320 Hz). Both tones stay within the selected range. |
+| Sound | Sine, sawtooth, square, triangle, or synthesized piano, violin, and flute. These are synthesized timbres, not recorded instruments. |
+| Background noise | None, white noise, or pink noise. |
 
-## 🔧 Configuration
+100 cents is one semitone; smaller gaps are harder. **Lower is on the left; Higher is on the right.** The prompt randomly asks about either the first or second pitch. The arrow keys answer for that pitch; **R** replays the same pair and question. Answer and replay controls become available after both tones finish. Keyboard shortcuts do not interfere with inputs.
 
-### Frequency Ranges
-```javascript
-const FREQUENCY_RANGES = {
-  high: { min: 660, max: 1320 },    // A5 to E6
-  medium: { min: 330, max: 660 },   // E4 to E5  
-  low: { min: 110, max: 220 },      // A2 to A3
-  changing: { min: 110, max: 1320 } // Full range
-};
+### Adaptive rules
+
+The old default narrowed the gap by 23% after each success and widened it by 30% after each error. In log-gap space, this nominally targets only 50.10% correct, very close to the 50% guessing rate.
+
+**Target accuracy (recommended):** for target probability `p` and error multiplier `u = 1 + adjustmentPercent / 100`, the success multiplier is `d = u ** (-(1-p)/p)`. Thus `p*log(d) + (1-p)*log(u) = 0`. At the defaults of 75% and +30%, each success reduces the gap by about 8.37%. Changing adjustment speed preserves the nominal target. Smaller steps are smoother but take longer to adapt.
+
+**Two/three consecutive correct:** a complete streak reduces the gap by `1/u`; one error multiplies it by `u`. The counter resets after an error or a completed streak, including at a range boundary. These reciprocal steps give nominal targets of about 70.7% and 79.4%. Replays do not advance or reset the streak.
+
+**Fixed gap:** neither successes nor errors alter the gap. A live slider changes the next new pair while replay retains the current pair. This replaces Sandbox, with lives and question limits now independently configurable.
+
+**Advanced/custom:** choose the success reduction and error widening independently. The implied target is shown, with an explanation when it approaches or falls below chance. A 0% success reduction means only errors alter the gap; it is not fixed-gap practice.
+
+These are nominal targets. Finite steps, gap boundaries, short sessions, and changing listener performance affect the achieved rate. They are established adaptive-testing ideas, not proof of an optimal learning success rate: [Levitt (1971)](https://bdml.stanford.edu/twiki/pub/Haptics/DetectionThreshold/psychoacoustics.pdf), [Kaernbach (1991)](https://pubmed.ncbi.nlm.nih.gov/2011460/).
+
+### Results and history
+
+Results lead with **accuracy and number of answers** and **typical practice gap**, the median of the most recent 20 answered pairs (or all answers for shorter sessions). A single-answer minimum is available in a disclosure with an explanation that it may reflect guessing.
+
+An approximate practice threshold is reported only after sufficient settling, reversals, and evidence above chance. Otherwise the result explains why it is unavailable. Estimates use the nominal target of the chosen adaptive rule and explicitly flag recent encounters with the 1- or 100-cent boundaries. Fixed-gap and custom rules at/below chance or at 100% get no estimate. Replays on answered pairs are recorded and disclosed. These summaries are practice statistics, not validated hearing measurements.
+
+The latest 30 completed sessions with at least one answer are saved, including settings, accuracy, typical gap, estimate status, timestamp, and stopping reason. The **Same settings only** filter compares effective progression parameters, starting gap, session limits, register, sound, noise, and pitch selection. All settings remain visible for each record; results are not ranked by the smallest gap.
+
+Existing settings migrate to Advanced/custom with their percentages and lives preserved. Old Sandbox settings migrate to Fixed gap with unlimited lives and no question limit. **Use recommended practice** switches to 75% target, 30% error steps, unlimited lives, and 50 questions, while retaining starting gap and sound/pitch preferences. The settings form also provides **Use recommended adaptation (75%)**, which changes only the adaptive rule. Historical scores remain in their original storage key, displayed separately and never rewritten by new sessions.
+
+For the exact estimate gates, reproducible simulation results, and limitations, see [Adaptive practice validation](docs/adaptation-validation.md). Run the simulations with:
+
+```sh
+node scripts/simulate-adaptation.cjs
 ```
 
-### Sound Effects
-Customizable audio feedback using chord progressions and musical intervals.
+## How pitches are selected
 
-## 🤝 Contributing
+The original implementation chose an arbitrary first frequency uniformly in Hz within a register, then placed the second a precise interval above or below it. Neither frequency was deliberately snapped to a musical note.
 
-We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
+The current implementation offers both approaches:
 
-### Development Setup
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+- **Arbitrary pitches:** choose a continuous random anchor frequency, then offset the other tone by the requested gap. Neither tone is snapped to a note grid.
+- **Musical note reference:** choose a random note from twelve-tone equal temperament with A4 = 440 Hz, then offset the other tone. The tuned reference is independently randomized to the first or second position. At a gap of exactly 100 cents, both tones necessarily land on musical notes.
 
-### Areas for Contribution
-- Additional game modes and exercises
-- Enhanced sound design
-- Performance optimizations
-- Accessibility improvements
-- Mobile app versions
-- Multiplayer features
+For a gap `c` in cents, the frequency ratio is `2 ** (c / 1200)`. A note with MIDI number `m` has frequency `440 * 2 ** ((m - 69) / 12)`. The offset may be above or below the anchor. Anchor selection is constrained so both frequencies stay within the register. Direction, presentation order, and the question target are independently randomized once per round; replay does not reroll them.
 
-## 📊 Browser Compatibility
+“Musical note” here means a frequency on the A440 equal-tempered grid, not the only musically valid pitch or tuning system. The violin timbre adds vibrato around its assigned frequency, so sine is the clearest choice for comparing steady reference frequencies.
 
-- **Chrome**: Full support (recommended)
-- **Firefox**: Full support
-- **Safari**: Full support  
-- **Edge**: Full support
-- **Mobile**: iOS Safari, Chrome Mobile
+### Teaching tradeoffs
 
-**Note**: Requires Web Audio API support (available in all modern browsers)
+Our recommendation is arbitrary pitches as the default for general relative-pitch discrimination, with note references as an option for practice around standard tuning. This is a design judgment, not a claim that either mode has been demonstrated to be universally superior.
 
-## 🎵 Musical Background
+Research on frequency-discrimination training shows that reference-frequency variability can affect learning and transfer differently across listeners: [Amitay, Hawkey & Moore (2005)](https://pubmed.ncbi.nlm.nih.gov/16134462/). It compares fixed and varying standards, not these exact two app modes. Both app modes vary their reference across rounds, and neither requires identifying note names or having absolute pitch. A smaller register can make practice more focused; note anchoring adds a conventional tuning reference without changing the basic higher/lower task.
 
-### What Makes Intonation Ear Trainer Different
+## Code organization
 
-Traditional ear training apps focus on:
-- **Interval Recognition**: Identifying named intervals (Major 3rd, Perfect 5th, etc.)
-- **Scale Degrees**: Recognizing notes within a key context
-- **Chord Progressions**: Harmonic relationships
+- `src/App.tsx`: session state, round timing, keyboard controls, and screen navigation.
+- `src/game.ts`: pitch-pair generation, answer grading, and adaptive rules.
+- `src/session.ts`: session limits, descriptive statistics, estimate eligibility, and comparison keys.
+- `src/simulation.ts`: deterministic synthetic listeners for validation.
+- `src/audio.ts`: Web Audio synthesis, effects, background noise, and audio cleanup.
+- `src/storage.ts`: validated settings migration, historical records, and bounded session history with graceful fallback when storage is unavailable.
+- `src/components/`: settings, instructions, ready/play/results screens, and feedback controls.
+- `src/constants.ts` / `src/types.ts`: defaults, ranges, options, and shared types.
 
-Intonation Ear Trainer specifically targets:
-- **Microtonal Perception**: Differences smaller than semitones
-- **Intonation Training**: Pure pitch discrimination
-- **Performance Skills**: Practical tuning abilities
+React 19 and TypeScript, built with Create React App. Tailwind 3 is compiled locally from `src/index.css`; styling does not require a CDN. Lucide supplies interface icons. There is no backend or account system.
 
-### Educational Value
+The tests cover exact cent gaps, register boundaries, note placement, both question targets, target tracking, streaks, session limits, fixed practice, replay, canceled playback, summary eligibility, migration/persistence, and audio initialization failures.
 
-Research shows that fine pitch discrimination training:
-- Improves overall musical performance
-- Enhances ensemble playing skills
-- Develops more accurate intonation
-- Builds confidence in musical settings
+## License
 
-## 📜 License
-
-This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md) file for details.
-
-## 🙏 Acknowledgments
-
-- Original Intonation Ear Trainer iOS app developers for the concept
-- Web Audio API documentation and community
-- React and modern web development ecosystem
-- Music education research supporting ear training methodologies
-
-## 📧 Contact
-
-- **GitHub Issues**: [Report bugs or request features](https://github.com/yourusername/intune-ear-training/issues)
-- **Email**: michael.hamel80@gmail.com
-
----
-
-**Happy ear training! 🎵**
+[MIT](LICENSE.MD) · Copyright 2025 Michael Hamel
