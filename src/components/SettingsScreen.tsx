@@ -24,7 +24,7 @@ const SettingsScreen = ({ settings, onSave, close }: SettingsScreenProps) => {
     setNumbers(previous => ({ ...previous, [key]: value }));
   const validNumber = (key: keyof typeof numbers, min: number, max: number, fallback: number) => {
     const value = Number(numbers[key]);
-    const integral = key !== 'lives' && key !== 'questions' || Number.isInteger(value);
+    const integral = (key !== 'lives' && key !== 'questions') || Number.isInteger(value);
     return numbers[key] !== '' && Number.isFinite(value) && integral && value >= min && value <= max ? value : fallback;
   };
   const proposed: Settings = {
